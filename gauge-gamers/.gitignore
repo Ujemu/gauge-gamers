@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+vite.svg
+
+# env/secrets (DON'T COMMIT YOUR PIN)
+.env
+.env.*
+!.env.example
+.env.local
+
+# misc
+.DS_Store
+.vscode/
+npm-debug.log*
