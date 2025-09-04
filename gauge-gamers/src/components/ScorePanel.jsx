@@ -1,13 +1,21 @@
 // src/components/ScorePanel.jsx
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { isAdmin, setAdmin, hasPin, setPin, checkPin } from "../utils/admin";
 import {
+  fetchLeaderboard,        // <- use list of players already used by the page
   adminFetchPlayer,
   adminIncScore,
   adminUpdateIds,
 } from "../lib/supabaseClient";
 
-/* ---- styles from your existing panel (kept) ---- */
+/* ---- minimal game map for filtering/selects ---- */
+const GAME_CONFIG = {
+  smash: { idKey: "smash_id",  scoreKey: "score_smash",  label: "Smash Karts" },
+  poker: { idKey: "poker_id",  scoreKey: "score_poker",  label: "Poker"       },
+  pudgy: { idKey: "pudgy_party_id", scoreKey: "score_pudgy", label: "Pudgy Party" },
+};
+
+/* ---- styles (kept) ---- */
 const gradient = "linear-gradient(90deg, rgb(59,130,246), rgb(236,72,153))";
 
 const btnToggle = (authorized) => ({
@@ -30,7 +38,8 @@ const panel = {
   right: 18,
   bottom: 130,
   zIndex: 60,
-  width: 300,
+  width: 340,
+  maxWidth: "95vw",
   padding: 14,
   borderRadius: 16,
   border: "1px solid rgba(255,255,255,0.18)",
@@ -50,11 +59,21 @@ const input = {
   color: "#fff",
   outline: "none",
 };
+const select = input;
 const btnAction = {
   marginTop: 6,
   width: "100%",
   padding: "12px 14px",
   borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: gradient,
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+const smallBtn = {
+  padding: "10px 12px",
+  borderRadius: 10,
   border: "1px solid rgba(255,255,255,0.18)",
   background: gradient,
   color: "#fff",
@@ -71,22 +90,28 @@ const linkBtn = {
 };
 const divider = { height: 1, background: "rgba(255,255,255,0.12)", margin: "10px 0" };
 
+const fmtHandle = (h, username) => {
+  if (h && h.trim()) return h.trim().startsWith("@") ? h.trim() : `@${h.trim()}`;
+  if (username && username.trim()) return `@${username.trim()}`;
+  return "—";
+};
+
 export default function ScorePanel({ onChange }) {
   const [open, setOpen] = useState(false);
   const [authorized, setAuthorized] = useState(isAdmin());
 
-  // PIN creation/unlock (4-digit)
-  const [pinCreate, setPinCreate] = useState("");
-  const [pinConfirm, setPinConfirm] = useState("");
+  // players list (for selects)
+  const [players, setPlayers] = useState([]);
+  const [loadingList, setLoadingList] = useState(false);
 
   // points state
-  const [handleForPoints, setHandleForPoints] = useState(""); // X handle (no @)
   const [game, setGame] = useState("smash"); // "smash" | "poker" | "pudgy"
+  const [handleForPoints, setHandleForPoints] = useState(""); // normalized (no @)
   const [points, setPoints] = useState(0);
   const [busyPoints, setBusyPoints] = useState(false);
 
   // quick edit IDs
-  const [handleForIds, setHandleForIds] = useState(""); // X handle (no @)
+  const [handleForIds, setHandleForIds] = useState(""); // normalized (no @)
   const [loadingPlayer, setLoadingPlayer] = useState(false);
   const [player, setPlayer] = useState(null);
   const [pokerId, setPokerId] = useState("");
@@ -100,25 +125,40 @@ export default function ScorePanel({ onChange }) {
 
   function resetFeedback() { setErr(null); setMsg(null); }
 
+  // Load players when panel opens or game changes
+  useEffect(() => {
+    if (!open || !authorized) return;
+    (async () => {
+      setLoadingList(true);
+      const { data, error } = await fetchLeaderboard();
+      setLoadingList(false);
+      if (error) { setErr(error.message || "Failed to load players"); setPlayers([]); return; }
+      setPlayers(Array.isArray(data) ? data : []);
+    })();
+  }, [open, authorized, game]);
+
+  // Filter players to those who *registered* for the selected game
+  const filteredPlayers = useMemo(() => {
+    const idKey = GAME_CONFIG[game].idKey;
+    const list = players.filter(p => !!p?.[idKey]);
+    list.sort((a, b) => (a.username || "").localeCompare(b.username || ""));
+    return list;
+  }, [players, game]);
+
   const handleToggle = () => {
     if (!authorized) {
-      // If no PIN exists yet, allow creating a local 4-digit PIN (unless env PIN is set)
       if (!hasPin()) {
         const p1 = window.prompt("Create 4-digit Admin PIN (digits only)");
         const p2 = window.prompt("Confirm PIN");
         if (p1 && p2 && p1 === p2) {
           const res = setPin(String(p1).replace(/\D/g, "").slice(0,4));
-          if (res?.error) {
-            alert(res.error);
-          } else {
-            alert("PIN saved. Click Admin again and enter the PIN to unlock.");
-          }
+          if (res?.error) alert(res.error);
+          else alert("PIN saved. Click Admin again and enter the PIN to unlock.");
         } else if (p1 != null && p2 != null) {
           alert("PINs did not match. Try again.");
         }
         return;
       }
-
       const pin = window.prompt("Enter 4-digit Admin PIN");
       if (pin && checkPin(pin)) {
         setAdmin(true);
@@ -129,7 +169,7 @@ export default function ScorePanel({ onChange }) {
       }
       return;
     }
-    setOpen((v) => !v);
+    setOpen(v => !v);
   };
 
   const logoutAdmin = () => {
@@ -144,7 +184,7 @@ export default function ScorePanel({ onChange }) {
     resetFeedback();
     const u = (handleForPoints || "").trim().replace(/^@+/, "");
     const delta = Number(points || 0);
-    if (!u) { setErr("Enter X handle (no @) for Points."); return; }
+    if (!u) { setErr("Pick a player or enter an X handle (no @)."); return; }
     if (!delta) { setErr("Enter a non-zero delta."); return; }
     setBusyPoints(true);
     const { error } = await adminIncScore({ username: u, game, delta });
@@ -159,7 +199,7 @@ export default function ScorePanel({ onChange }) {
   async function loadPlayer() {
     resetFeedback();
     const u = (handleForIds || "").trim().replace(/^@+/, "");
-    if (!u) { setErr("Enter X handle (no @) to load IDs."); return; }
+    if (!u) { setErr("Pick a player or enter an X handle (no @) to load IDs."); return; }
     setLoadingPlayer(true);
     const { data, error } = await adminFetchPlayer(u);
     setLoadingPlayer(false);
@@ -201,28 +241,45 @@ export default function ScorePanel({ onChange }) {
       {open && authorized && (
         <div style={panel}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-            <strong>Admin</strong>
+            <strong>Score Admin</strong>
             <button onClick={logoutAdmin} style={linkBtn}>Sign out</button>
+          </div>
+
+          {/* GAME PICK (affects player list) */}
+          <div style={row}>
+            <label style={label}>Game</label>
+            <select value={game} onChange={(e) => setGame(e.target.value)} style={select}>
+              <option value="smash">{GAME_CONFIG.smash.label}</option>
+              <option value="poker">{GAME_CONFIG.poker.label}</option>
+              <option value="pudgy">{GAME_CONFIG.pudgy.label}</option>
+            </select>
           </div>
 
           {/* POINTS */}
           <div style={row}>
-            <label style={label}>X Handle for Points (no @)</label>
+            <label style={label}>Select player for Points (registered in this game)</label>
+            <select
+              disabled={loadingList}
+              value={handleForPoints}
+              onChange={(e) => setHandleForPoints(e.target.value)}
+              style={select}
+            >
+              <option value="">{loadingList ? "Loading…" : "— Choose player —"}</option>
+              {filteredPlayers.map((p) => (
+                <option key={p.username} value={p.username}>
+                  {p.username} • {fmtHandle(p.twitter, p.username)}
+                </option>
+              ))}
+            </select>
+            <small style={{ color: "#94a3b8" }}>
+              Or type handle manually (no @):
+            </small>
             <input
               value={handleForPoints}
               onChange={(e) => setHandleForPoints(e.target.value)}
               placeholder="e.g. Kings_webx"
               style={input}
             />
-          </div>
-
-          <div style={row}>
-            <label style={label}>Game</label>
-            <select value={game} onChange={(e) => setGame(e.target.value)} style={input}>
-              <option value="smash">Smash Karts</option>
-              <option value="poker">Poker</option>
-              <option value="pudgy">Pudgy Party</option>
-            </select>
           </div>
 
           <div style={row}>
@@ -244,18 +301,34 @@ export default function ScorePanel({ onChange }) {
 
           {/* QUICK EDIT: PLAYER IDs */}
           <div style={row}>
-            <label style={label}>X Handle for IDs (no @)</label>
+            <label style={label}>Select player for ID edits (registered in this game)</label>
             <div style={{ display: "flex", gap: 8 }}>
-              <input
+              <select
+                disabled={loadingList}
                 value={handleForIds}
                 onChange={(e) => setHandleForIds(e.target.value)}
-                placeholder="e.g. Kings_webx"
-                style={{ ...input, flex: 1 }}
-              />
-              <button onClick={loadPlayer} style={{ ...btnAction, width: 110 }}>
+                style={{ ...select, flex: 1 }}
+              >
+                <option value="">{loadingList ? "Loading…" : "— Choose player —"}</option>
+                {filteredPlayers.map((p) => (
+                  <option key={p.username} value={p.username}>
+                    {p.username} • {fmtHandle(p.twitter, p.username)}
+                  </option>
+                ))}
+              </select>
+              <button onClick={loadPlayer} style={{ ...smallBtn, width: 120 }}>
                 {loadingPlayer ? "Loading…" : "Load"}
               </button>
             </div>
+            <small style={{ color: "#94a3b8" }}>
+              Or type handle manually (no @):
+            </small>
+            <input
+              value={handleForIds}
+              onChange={(e) => setHandleForIds(e.target.value)}
+              placeholder="e.g. Kings_webx"
+              style={input}
+            />
           </div>
 
           <div style={row}>
