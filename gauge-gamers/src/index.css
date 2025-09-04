@@ -47,6 +47,13 @@ body {
   max-width: 720px; /* adjust 720–960 to taste */
 }
 
+/* ✅ Make all first-level children align with the centered middle block */
+.section > * {
+  margin-inline: auto;   /* center horizontally */
+  /* uncomment if any child needs the same max width as the form */
+  /* max-width: 720px; */
+}
+
 /* Optional card helper if you want panels */
 .card {
   background: rgba(255, 255, 255, 0.06);
