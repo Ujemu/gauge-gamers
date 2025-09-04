@@ -28,14 +28,19 @@ export default function LeaderboardPage() {
     return () => { alive = false; };
   }, [tick]); // refetch when ScorePanel triggers onChange
 
+  // ✅ Only include players who registered for the selected game
   const rows = useMemo(() => {
-    const arr = players.slice();
-    arr.sort((a, b) => {
+    const eligible = players.filter(p =>
+      game === "poker" ? !!p?.poker_id : !!p?.smash_id
+    );
+
+    eligible.sort((a, b) => {
       const aScore = game === "poker" ? (a?.score_poker ?? 0) : (a?.score_smash ?? 0);
       const bScore = game === "poker" ? (b?.score_poker ?? 0) : (b?.score_smash ?? 0);
       return bScore - aScore;
     });
-    return arr;
+
+    return eligible;
   }, [players, game]);
 
   const scoreLabel = game === "poker" ? "Chips" : "Points";
@@ -79,7 +84,7 @@ export default function LeaderboardPage() {
 
           {!loading && !err && rows.length === 0 && (
             <div style={{ color: "#94a3b8", padding: "10px 12px" }}>
-              No players yet — register to appear here.
+              No players yet for this game — register to appear here.
             </div>
           )}
 
@@ -102,7 +107,7 @@ export default function LeaderboardPage() {
         </div>
       </div>
 
-      {/* For now, keep this to let you trigger a refresh after score changes. */}
+      {/* Keep this to trigger a refetch after any score changes */}
       <ScorePanel onChange={() => setTick(t => t + 1)} />
     </div>
   );
