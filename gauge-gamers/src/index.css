@@ -1,0 +1,28 @@
+:root {
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* PT Mono (loaded in main.jsx via @fontsource) */
+  font-family: "PT Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+
+  color: #e9eef5;
+  background: #0e1217;
+  background-image: url("./assets/gauge-bg.png"); /* your Base-style background */
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  /* optional: keep the image fixed on scroll */
+  /* background-attachment: fixed; */
+}
+
+.app-overlay {
+  min-height: 100%;
+  background: var(--bg-overlay); /* subtle contrast for text/UI */
+}
