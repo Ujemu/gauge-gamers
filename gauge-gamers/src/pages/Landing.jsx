@@ -4,14 +4,19 @@ import { Link, useNavigate } from "react-router-dom";
 import NavBar from "../components/NavBar";
 import { upsertPlayer } from "../lib/supabaseClient";
 
+function normalizeHandle(h) {
+  if (!h) return "";
+  return h.trim().replace(/^@+/, ""); // drop leading '@'
+}
+
 export default function Landing() {
   const navigate = useNavigate();
 
-  // form state (replaces localStorage-only behavior)
-  const [username, setUsername] = useState("");
+  // no username anymore — X handle is the identity
   const [twitter, setTwitter] = useState("");
   const [pokerId, setPokerId] = useState("");
   const [smashId, setSmashId] = useState("");
+  const [pudgyId, setPudgyId] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState(null);
@@ -22,25 +27,30 @@ export default function Landing() {
     setErr(null);
     setMsg(null);
 
-    const u = username.trim();
-    if (!u) {
-      setErr("Username is required.");
+    const handle = normalizeHandle(twitter);
+    if (!handle) {
+      setErr("X (Twitter) handle is required.");
       return;
     }
 
+    // store the normalized handle as `username` (unique),
+    // and keep the display handle with '@' in `twitter`
+    const username = handle;
+    const twitterDisplay = `@${handle}`;
+
     setSubmitting(true);
     const { error } = await upsertPlayer({
-      username: u,
-      twitter: twitter.trim() || null,
+      username,
+      twitter: twitterDisplay,
       pokerId: pokerId.trim() || null,
       smashId: smashId.trim() || null,
+      pudgyPartyId: pudgyId.trim() || null,
     });
     setSubmitting(false);
 
     if (error) {
-      // duplicate username -> unique constraint
       if (error.code === "23505" || /duplicate/i.test(error.message)) {
-        setErr("That username is already registered. Pick another.");
+        setErr("That X handle is already registered. Pick another.");
       } else {
         setErr(error.message || "Something went wrong. Please try again.");
       }
@@ -53,10 +63,8 @@ export default function Landing() {
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      {/* Top navigation (contains the single Gauge Gamers badge) */}
       <NavBar />
 
-      {/* Page content */}
       <div
         style={{
           flex: 1,
@@ -67,61 +75,48 @@ export default function Landing() {
         }}
       >
         <div style={{ width: "100%", maxWidth: 960 }}>
-          {/* Subtitle pill only */}
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.35 }}
             style={pillSub}
           >
-            <span
-              style={{
-                fontFamily:
-                  '"PT Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-              }}
-            >
+            <span style={{ fontFamily: '"PT Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
               Register once to appear on the leaderboard.
             </span>
           </motion.div>
 
-          {/* Registration card (now saves to Supabase) */}
-          <div
-            className="card"
-            style={{
-              padding: 20,
-              borderRadius: 16,
-              backdropFilter: "blur(4px)",
-            }}
-          >
+          <div className="card" style={{ padding: 20, borderRadius: 16, backdropFilter: "blur(4px)" }}>
             <h2 style={{ margin: "4px 0 12px 0" }}>Register Your Player Identity</h2>
 
             <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
               <input
                 className="card"
-                placeholder="Username *"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                style={{ padding: 12, borderRadius: 12, border: "none" }}
-              />
-              <input
-                className="card"
-                placeholder="X (Twitter) Handle e.g. @web3degen"
+                placeholder="X (Twitter) Handle e.g. @web3degen  *"
                 value={twitter}
                 onChange={(e) => setTwitter(e.target.value)}
                 style={{ padding: 12, borderRadius: 12, border: "none" }}
+                required
               />
               <input
                 className="card"
-                placeholder="Poker ID"
+                placeholder="Poker Name/ID (optional)"
                 value={pokerId}
                 onChange={(e) => setPokerId(e.target.value)}
                 style={{ padding: 12, borderRadius: 12, border: "none" }}
               />
               <input
                 className="card"
-                placeholder="Smash Karts ID"
+                placeholder="Smash Karts Name/ID (optional)"
                 value={smashId}
                 onChange={(e) => setSmashId(e.target.value)}
+                style={{ padding: 12, borderRadius: 12, border: "none" }}
+              />
+              <input
+                className="card"
+                placeholder="Pudgy Party Name/ID (optional)"
+                value={pudgyId}
+                onChange={(e) => setPudgyId(e.target.value)}
                 style={{ padding: 12, borderRadius: 12, border: "none" }}
               />
 
@@ -134,8 +129,7 @@ export default function Landing() {
                   border: "none",
                   fontWeight: 800,
                   cursor: submitting ? "not-allowed" : "pointer",
-                  background:
-                    "linear-gradient(90deg, rgb(59,130,246) 0%, rgb(236,72,153) 100%)",
+                  background: "linear-gradient(90deg, rgb(59,130,246) 0%, rgb(236,72,153) 100%)",
                   color: "#fff",
                 }}
               >
@@ -143,27 +137,13 @@ export default function Landing() {
               </button>
             </form>
 
-            {err && (
-              <p style={{ color: "#ff8a8a", marginTop: 12 }}>
-                {err}
-              </p>
-            )}
-            {msg && (
-              <p style={{ color: "#8affb1", marginTop: 12 }}>
-                {msg}
-              </p>
-            )}
+            {err && <p style={{ color: "#ff8a8a", marginTop: 12 }}>{err}</p>}
+            {msg && <p style={{ color: "#8affb1", marginTop: 12 }}>{msg}</p>}
           </div>
 
-          {/* Big CTA pill */}
           <div style={{ marginTop: 20 }}>
             <Link to="/leaderboard" style={pillCta}>
-              <span
-                style={{
-                  fontFamily:
-                    '"PT Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-                }}
-              >
+              <span style={{ fontFamily: '"PT Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
                 Already registered? View Leaderboard →
               </span>
             </Link>
