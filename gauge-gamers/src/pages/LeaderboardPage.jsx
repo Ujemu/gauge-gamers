@@ -3,8 +3,14 @@ import NavBar from "../components/NavBar";
 import ScorePanel from "../components/ScorePanel"; // keep if you already added it
 import { fetchLeaderboard } from "../lib/supabaseClient";
 
+const GAME_CONFIG = {
+  smash: { title: "Smash Karts", idKey: "smash_id",  scoreKey: "score_smash",  scoreLabel: "Points" },
+  poker: { title: "Poker",       idKey: "poker_id",  scoreKey: "score_poker",  scoreLabel: "Chips"  },
+  pudgy: { title: "Pudgy Party", idKey: "pudgy_party_id", scoreKey: "score_pudgy", scoreLabel: "Points" },
+};
+
 export default function LeaderboardPage() {
-  const [game, setGame] = useState("poker"); // "poker" | "smash"
+  const [game, setGame] = useState("smash"); // "smash" | "poker" | "pudgy"
   const [tick, setTick] = useState(0);
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -28,22 +34,21 @@ export default function LeaderboardPage() {
     return () => { alive = false; };
   }, [tick]); // refetch when ScorePanel triggers onChange
 
-  // ✅ Only include players who registered for the selected game
+  // ✅ Only include players who registered for the selected game, show proper ID & score
   const rows = useMemo(() => {
-    const eligible = players.filter(p =>
-      game === "poker" ? !!p?.poker_id : !!p?.smash_id
-    );
+    const { idKey, scoreKey } = GAME_CONFIG[game];
+    const eligible = players.filter(p => !!p?.[idKey]);
 
     eligible.sort((a, b) => {
-      const aScore = game === "poker" ? (a?.score_poker ?? 0) : (a?.score_smash ?? 0);
-      const bScore = game === "poker" ? (b?.score_poker ?? 0) : (b?.score_smash ?? 0);
+      const aScore = a?.[scoreKey] ?? 0;
+      const bScore = b?.[scoreKey] ?? 0;
       return bScore - aScore;
     });
 
     return eligible;
   }, [players, game]);
 
-  const scoreLabel = game === "poker" ? "Chips" : "Points";
+  const { title, scoreLabel, idKey, scoreKey } = GAME_CONFIG[game];
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -57,19 +62,21 @@ export default function LeaderboardPage() {
         <div style={{ display: "inline-flex", gap: 10, marginBottom: 16 }}>
           <Tab active={game === "smash"} onClick={() => setGame("smash")}>Smash Karts</Tab>
           <Tab active={game === "poker"} onClick={() => setGame("poker")}>Poker</Tab>
+          <Tab active={game === "pudgy"} onClick={() => setGame("pudgy")}>Pudgy Party</Tab>
         </div>
 
         <div style={card}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
             <h3 style={{ color: "#fff", margin: 0, fontWeight: 800 }}>
-              {game === "poker" ? "Poker Leaderboard" : "Smash Karts Leaderboard"}
+              {title} Leaderboard
             </h3>
           </div>
 
           {/* Header */}
           <div style={thead}>
             <div style={{ width: 52 }}>#</div>
-            <div style={{ flex: 1 }}>Player</div>
+            <div style={{ flex: 1 }}>Player ID</div>
+            <div style={{ width: 200 }}>X Handle</div>
             <div style={{ width: 120, textAlign: "right" }}>{scoreLabel}</div>
           </div>
 
@@ -89,14 +96,19 @@ export default function LeaderboardPage() {
           )}
 
           {!loading && !err && rows.length > 0 && rows.map((p, idx) => {
-            const score = game === "poker" ? (p?.score_poker ?? 0) : (p?.score_smash ?? 0);
+            const score = p?.[scoreKey] ?? 0;
+            const idValue = p?.[idKey] || "—";
+            const xHandle = p?.twitter || (p?.username ? `@${p.username}` : "—");
             return (
               <div key={p.username ?? idx} style={trow(idx)}>
                 <div style={{ width: 52 }}>
                   {idx < 3 ? <Medal rank={idx + 1} /> : `#${idx + 1}`}
                 </div>
                 <div style={{ flex: 1, fontWeight: 700, color: "#e5e7eb" }}>
-                  {p?.username || "Player"}
+                  {idValue}
+                </div>
+                <div style={{ width: 200, color: "#cbd5e1", fontWeight: 600 }}>
+                  {xHandle}
                 </div>
                 <div style={{ width: 120, textAlign: "right", fontWeight: 800, color: "#fff" }}>
                   {score}
