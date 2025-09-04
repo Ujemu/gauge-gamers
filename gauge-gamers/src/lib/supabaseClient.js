@@ -28,9 +28,7 @@ export async function upsertPlayer({ username, twitter, pokerId, smashId }) {
 export async function fetchLeaderboard() {
   const { data, error } = await supabase
     .from("players")
-    .select("username, score_smash, score_poker, created_at")
-    .order("score_smash", { ascending: false })
-    .order("score_poker", { ascending: false })
+    .select("username, score_smash, score_poker, created_at, poker_id, smash_id")
     .limit(100);
   return { data, error };
 }
