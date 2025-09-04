@@ -1,25 +1,40 @@
 import React, { useEffect, useMemo, useState } from "react";
 import NavBar from "../components/NavBar";
 import ScorePanel from "../components/ScorePanel"; // keep if you already added it
-
-const PLAYERS_KEY = "gaugePlayers";
-
-function loadPlayers() {
-  try { return JSON.parse(localStorage.getItem(PLAYERS_KEY)) || []; }
-  catch { return []; }
-}
-const safeScore = (p, game) => (p?.scores?.[game] ?? 0);
+import { fetchLeaderboard } from "../lib/supabaseClient";
 
 export default function LeaderboardPage() {
   const [game, setGame] = useState("poker"); // "poker" | "smash"
   const [tick, setTick] = useState(0);
   const [players, setPlayers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
 
-  useEffect(() => { setPlayers(loadPlayers()); }, [tick]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      const { data, error } = await fetchLeaderboard(); // shared DB
+      if (!alive) return;
+      if (error) {
+        setErr(error.message || "Failed to load leaderboard");
+        setPlayers([]);
+      } else {
+        setPlayers(Array.isArray(data) ? data : []);
+      }
+      setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, [tick]); // refetch when ScorePanel triggers onChange
 
   const rows = useMemo(() => {
     const arr = players.slice();
-    arr.sort((a, b) => safeScore(b, game) - safeScore(a, game));
+    arr.sort((a, b) => {
+      const aScore = game === "poker" ? (a?.score_poker ?? 0) : (a?.score_smash ?? 0);
+      const bScore = game === "poker" ? (b?.score_poker ?? 0) : (b?.score_smash ?? 0);
+      return bScore - aScore;
+    });
     return arr;
   }, [players, game]);
 
@@ -53,28 +68,41 @@ export default function LeaderboardPage() {
             <div style={{ width: 120, textAlign: "right" }}>{scoreLabel}</div>
           </div>
 
-          {/* Rows (only registered players) */}
-          {rows.length ? rows.map((p, idx) => (
-            <div key={(p.twitter || p.username || "p") + idx} style={trow(idx)}>
-              <div style={{ width: 52 }}>
-                {idx < 3 ? <Medal rank={idx + 1} /> : `#${idx + 1}`}
-              </div>
-              <div style={{ flex: 1, fontWeight: 700, color: "#e5e7eb" }}>
-                {p?.username || p?.twitter || "Player"}
-              </div>
-              <div style={{ width: 120, textAlign: "right", fontWeight: 800, color: "#fff" }}>
-                {safeScore(p, game)}
-              </div>
-            </div>
-          )) : (
+          {/* Rows */}
+          {loading && (
+            <div style={{ color: "#94a3b8", padding: "10px 12px" }}>Loading…</div>
+          )}
+
+          {!loading && err && (
+            <div style={{ color: "#ff8a8a", padding: "10px 12px" }}>{err}</div>
+          )}
+
+          {!loading && !err && rows.length === 0 && (
             <div style={{ color: "#94a3b8", padding: "10px 12px" }}>
               No players yet — register to appear here.
             </div>
           )}
+
+          {!loading && !err && rows.length > 0 && rows.map((p, idx) => {
+            const score = game === "poker" ? (p?.score_poker ?? 0) : (p?.score_smash ?? 0);
+            return (
+              <div key={p.username ?? idx} style={trow(idx)}>
+                <div style={{ width: 52 }}>
+                  {idx < 3 ? <Medal rank={idx + 1} /> : `#${idx + 1}`}
+                </div>
+                <div style={{ flex: 1, fontWeight: 700, color: "#e5e7eb" }}>
+                  {p?.username || "Player"}
+                </div>
+                <div style={{ width: 120, textAlign: "right", fontWeight: 800, color: "#fff" }}>
+                  {score}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* floating Add Score panel; remove if you don't want it visible here */}
+      {/* For now, keep this to let you trigger a refresh after score changes. */}
       <ScorePanel onChange={() => setTick(t => t + 1)} />
     </div>
   );
