@@ -1,6 +1,7 @@
 // src/lib/supabaseClient.js
 import { createClient } from "@supabase/supabase-js";
 
+/* -------------------- Supabase init -------------------- */
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -15,14 +16,18 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: { persistSession: false },
 });
 
-// ---------- utils ----------
-const norm = (s) => (s || "").trim().replace(/^@+/, "");
+/* -------------------- helpers -------------------- */
+const stripAt = (s) => (s || "").trim().replace(/^@+/, "");
+const norm = stripAt;
 
-// Try username first; fallback to twitter "@handle"
+/**
+ * Try to find a player by exact username first,
+ * then exact twitter (with @), then a loose fallback.
+ */
 async function getPlayerByNameOrTwitter(u) {
   const v = norm(u);
 
-  // username exact match
+  // 1) username exact
   {
     const { data, error } = await supabase
       .from("players")
@@ -32,7 +37,7 @@ async function getPlayerByNameOrTwitter(u) {
     if (!error && data) return { data };
   }
 
-  // twitter may be stored like "@web3degen"
+  // 2) twitter exact (stored like "@handle")
   {
     const { data, error } = await supabase
       .from("players")
@@ -40,25 +45,35 @@ async function getPlayerByNameOrTwitter(u) {
       .eq("twitter", `@${v}`)
       .maybeSingle();
     if (!error && data) return { data };
-    return { data: null, error }; // may be null if not found
+  }
+
+  // 3) loose fallback (ilike) — grab one row if multiple
+  {
+    const pattern = `%${v}%`;
+    const { data, error } = await supabase
+      .from("players")
+      .select("*")
+      .or(`username.ilike.${pattern},twitter.ilike.@${pattern}`)
+      .limit(1);
+    if (!error && Array.isArray(data) && data[0]) return { data: data[0] };
+    return { data: null, error };
   }
 }
 
-// =====================================================
-//  Public API (used across the app / admin panel)
-// =====================================================
+/* =====================================================
+   Public API (used across the app / admin panel)
+   ===================================================== */
 
 /**
  * Insert a new player registration.
  * We use the X handle (without '@') as the unique `username`.
- * (Duplicates will error because of the UNIQUE constraint — which you already handle in the UI.)
  */
 export async function upsertPlayer({
-  username,       // normalized X handle (no '@')
-  twitter,        // display value like "@web3degen"
+  username,     // normalized X handle (no '@')
+  twitter,      // display value like "@web3degen"
   pokerId,
   smashId,
-  pudgyPartyId,   // NEW
+  pudgyPartyId,
 }) {
   const payload = {
     username,
@@ -71,13 +86,15 @@ export async function upsertPlayer({
   const { data, error } = await supabase
     .from("players")
     .insert(payload)
-    .select("username, twitter, poker_id, smash_id, pudgy_party_id, created_at")
+    .select(
+      "username, twitter, poker_id, smash_id, pudgy_party_id, created_at"
+    )
     .single();
 
   return { data, error };
 }
 
-/** List EVERY player (admin dropdown, no game ID filter) */
+/** List EVERY player (for other UIs that need it) */
 export async function fetchAllPlayers() {
   const { data, error } = await supabase
     .from("players")
@@ -88,6 +105,30 @@ export async function fetchAllPlayers() {
     .order("username", { ascending: true })
     .range(0, 9999);
 
+  return { data, error };
+}
+
+/** 🚫 NEW: Only players registered for a specific game (used by Admin panel list) */
+export async function fetchPlayersForGame(game = "smash") {
+  const cols =
+    "id, username, twitter, poker_id, smash_id, pudgy_party_id, score_smash, score_poker, score_pudgy, created_at";
+
+  let query = supabase
+    .from("players")
+    .select(cols)
+    .order("username", { ascending: true })
+    .range(0, 9999);
+
+  // server-side filter: id column must be NOT NULL and not empty
+  if (game === "smash") {
+    query = query.not("smash_id", "is", null).neq("smash_id", "");
+  } else if (game === "poker") {
+    query = query.not("poker_id", "is", null).neq("poker_id", "");
+  } else if (game === "pudgy") {
+    query = query.not("pudgy_party_id", "is", null).neq("pudgy_party_id", "");
+  }
+
+  const { data, error } = await query;
   return { data, error };
 }
 
@@ -108,7 +149,10 @@ export async function adminUpdateIds(usernameOrTwitter, { pokerId, smashId, pudg
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from("players").update(updates).eq("username", found.username);
+  const { error } = await supabase
+    .from("players")
+    .update(updates)
+    .eq("id", found.id);
   return { error };
 }
 
@@ -121,25 +165,45 @@ export async function adminIncScore({ username, game, delta }) {
   if (!username) return { error: new Error("username required") };
   if (!d) return { error: new Error("delta must be non-zero") };
 
-  const { data: player, error: findErr } = await getPlayerByNameOrTwitter(username);
-  if (findErr || !player) return { error: findErr || new Error("Player not found") };
+  // resolve player (case-insensitive; username or @twitter)
+  const toLower = (s) => (s || "").trim().replace(/^@+/, "").toLowerCase();
+  const v = toLower(username);
 
-  const SCORE_KEYS = {
-    smash: "score_smash",
-    poker: "score_poker",
-    pudgy: "score_pudgy",
-  };
+  let { data: player, error: findErr } = await supabase
+    .from("players")
+    .select("id, username, twitter, score_smash, score_poker, score_pudgy")
+    .or(`username.ilike.${v},twitter.ilike.@${v}`)
+    .maybeSingle();
+
+  if (findErr || !player) {
+    // fallback: try exact username match only
+    const retry = await supabase
+      .from("players")
+      .select("id, username, twitter, score_smash, score_poker, score_pudgy")
+      .eq("username", username)
+      .maybeSingle();
+    player = retry.data;
+    if (retry.error || !player) {
+      return { error: findErr || retry.error || new Error("Player not found") };
+    }
+  }
+
+  const SCORE_KEYS = { smash: "score_smash", poker: "score_poker", pudgy: "score_pudgy" };
   const scoreCol = SCORE_KEYS[game];
-  if (!scoreCol) return { error: new Error("Invalid game key") };
+  if (!scoreCol) return { error: new Error(`Invalid game key "${game}"`) };
 
-  const nextVal = (player[scoreCol] || 0) + d;
+  const nextVal = Number(player[scoreCol] || 0) + d;
 
-  const { error } = await supabase
+  // do the update and return the fresh row
+  const { data: updated, error } = await supabase
     .from("players")
     .update({ [scoreCol]: nextVal, updated_at: new Date().toISOString() })
-    .eq("username", player.username);
+    .eq("id", player.id)
+    .select("id, username, twitter, score_smash, score_poker, score_pudgy, updated_at")
+    .single();
 
-  return { error };
+  console.log("[adminIncScore]", { game, scoreCol, username: player.username, delta: d, nextVal, error });
+  return { data: updated, error };
 }
 
 /**

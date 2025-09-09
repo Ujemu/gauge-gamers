@@ -1,23 +1,18 @@
 // src/components/ScorePanel.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { isAdmin, setAdmin, hasPin, setPin, checkPin } from "../utils/admin";
+import { isAdmin, setAdmin, hasPin, checkPin } from "../utils/admin";
 import {
   adminFetchPlayer,
   adminIncScore,
   adminUpdateIds,
-  fetchAllPlayers, // ✅ now listing ALL players
+  fetchPlayersForGame, // <-- use server-side filtered list
 } from "../lib/supabaseClient";
 
-/* ---------- config & small helpers ---------- */
-const GAME_CONFIG = {
-  smash: { title: "Smash Karts", idKey: "smash_id", scoreKey: "score_smash" },
-  poker: { title: "Poker",       idKey: "poker_id",  scoreKey: "score_poker" },
-  pudgy: { title: "Pudgy Party", idKey: "pudgy_party_id", scoreKey: "score_pudgy" },
-};
+/* ---------- helpers ---------- */
+const stripAt = (s) => (s || "").trim().replace(/^@+/, "");
+const normHandle = stripAt;
 
-const normHandle = (s) => (s || "").trim().replace(/^@+/, "");
-
-/* ---------- styles (kept from your version) ---------- */
+/* ---------- styles ---------- */
 const gradient = "linear-gradient(90deg, rgb(59,130,246), rgb(236,72,153))";
 
 const btnToggle = (authorized) => ({
@@ -91,19 +86,19 @@ const linkBtn = {
 const divider = { height: 1, background: "rgba(255,255,255,0.12)", margin: "10px 0" };
 
 /* ---------- component ---------- */
-export default function ScorePanel({ onChange }) {
+export default function ScorePanel({ currentGame = "smash", onChange }) {
   const [open, setOpen] = useState(false);
   const [authorized, setAuthorized] = useState(isAdmin());
 
   // game + list
-  const [game, setGame] = useState("smash"); // "smash" | "poker" | "pudgy"
+  const [game, setGame] = useState(currentGame); // follow parent tab
   const [listLoading, setListLoading] = useState(false);
   const [listErr, setListErr] = useState(null);
-  const [playersByGame, setPlayersByGame] = useState([]); // [{username, twitter}]
+  const [playersByGame, setPlayersByGame] = useState([]); // [{value, label}]
 
   // selection / points
-  const [selectedUsername, setSelectedUsername] = useState(""); // from dropdown
-  const [points, setPoints] = useState(0);
+  const [selectedUsername, setSelectedUsername] = useState(""); // username or twitter (no @)
+  const [points, setPoints] = useState(10); // default to non-zero
   const [busyPoints, setBusyPoints] = useState(false);
 
   // quick edit IDs
@@ -119,22 +114,17 @@ export default function ScorePanel({ onChange }) {
   const [msg, setMsg] = useState(null);
   const resetFeedback = () => { setErr(null); setMsg(null); };
 
+  // keep panel game in sync with page tab
+  useEffect(() => { setGame(currentGame); }, [currentGame]);
+
   /* --- auth toggle with PIN --- */
   const handleToggle = () => {
     if (!authorized) {
       if (!hasPin()) {
-        const p1 = window.prompt("Create 4-digit Admin PIN (digits only)");
-        const p2 = window.prompt("Confirm PIN");
-        if (p1 && p2 && p1 === p2) {
-          const res = setPin(String(p1).replace(/\D/g, "").slice(0, 4));
-          if (res?.error) alert(res.error);
-          else alert("PIN saved. Click Admin again and enter the PIN to unlock.");
-        } else if (p1 != null && p2 != null) {
-          alert("PINs did not match. Try again.");
-        }
+        alert("Admin PIN is not configured. Set VITE_ADMIN_PIN in your env.");
         return;
       }
-      const pin = window.prompt("Enter 4-digit Admin PIN");
+      const pin = window.prompt("Enter Admin PIN");
       if (pin && checkPin(pin)) {
         setAdmin(true);
         setAuthorized(true);
@@ -154,24 +144,28 @@ export default function ScorePanel({ onChange }) {
     alert("Admin access removed.");
   };
 
-  /* --- fetch ALL players for dropdown (no filter by ID) --- */
+  /* --- fetch ONLY players for current game (server filtered) --- */
   async function loadPlayersForGame() {
     setListErr(null);
     setListLoading(true);
     try {
-      const { data, error } = await fetchAllPlayers();
+      const { data, error } = await fetchPlayersForGame(game);
       if (error) throw error;
       const rows = Array.isArray(data) ? data : [];
-      const mapped = rows.map((p) => {
-        const fallbackHandle = normHandle(p.twitter || p.x_handle || p.handle || "");
-        const uname =
-          p.username || p.player_id || p.id || fallbackHandle || "";
-        return {
-          username: uname,
-          twitter: p.twitter || p.x_handle || p.handle || "",
-        };
-      });
-      mapped.sort((a, b) => (a.username || "").localeCompare(b.username || ""));
+
+      // Build safe options: prefer username; fallback to twitter (no @). Drop rows with neither.
+      const mapped = rows
+        .map((p) => {
+          const uname = (p.username || "").trim();
+          const tw = (p.twitter || "").trim().replace(/^@+/, "");
+          const value = uname || tw;
+          if (!value) return null;
+          const label = `${uname || tw}${p.twitter ? ` — ${p.twitter}` : ""}`;
+          return { value, label };
+        })
+        .filter(Boolean);
+
+      mapped.sort((a, b) => (a.value || "").localeCompare(b.value || ""));
       setPlayersByGame(mapped);
     } catch (e) {
       setListErr(e?.message || "Failed to load players");
@@ -183,9 +177,10 @@ export default function ScorePanel({ onChange }) {
 
   useEffect(() => {
     if (open && authorized) loadPlayersForGame();
+    setSelectedUsername("");
   }, [open, authorized, game]);
 
-  // when changing selected player, preload IDs block handle
+  // when changing selected player, clear the ID editors
   useEffect(() => {
     setPlayer(null);
     setPokerId("");
@@ -197,16 +192,26 @@ export default function ScorePanel({ onChange }) {
   async function addScore() {
     resetFeedback();
     const u = normHandle(selectedUsername);
-    const delta = Number(points || 0);
+    const delta = Number(points);
+
     if (!u) { setErr("Pick a player first."); return; }
-    if (!delta) { setErr("Enter a non-zero delta."); return; }
+    if (!Number.isFinite(delta) || delta === 0) { setErr("Enter a non-zero delta."); return; }
+
     setBusyPoints(true);
     const { error } = await adminIncScore({ username: u, game, delta });
     setBusyPoints(false);
+
     if (error) { setErr(error.message || "Failed to update score"); return; }
+
     setMsg("Score updated ✓");
-    setPoints(0);
-    onChange?.();
+    setPoints(10); // reset to non-zero
+
+    // 🔁 refresh the leaderboard immediately
+    if (typeof onChange === "function") {
+      onChange(game);
+    } else {
+      setTimeout(() => window.location.reload(), 300);
+    }
   }
 
   /* --- LOAD / SAVE IDs for the selected player --- */
@@ -237,16 +242,12 @@ export default function ScorePanel({ onChange }) {
     setBusyIds(false);
     if (error) { setErr(error.message || "Failed to update IDs"); return; }
     setMsg("Player IDs updated ✓");
-    onChange?.();
+
+    if (typeof onChange === "function") onChange(game);
   }
 
-  /* --- derived label for player select --- */
-  const options = useMemo(() => {
-    return playersByGame.map((p) => ({
-      value: p.username,
-      label: `${p.username}${p.twitter ? ` — ${p.twitter}` : ""}`,
-    }));
-  }, [playersByGame]);
+  /* --- dropdown options --- */
+  const options = useMemo(() => playersByGame, [playersByGame]);
 
   return (
     <>
@@ -265,7 +266,7 @@ export default function ScorePanel({ onChange }) {
             <button onClick={logoutAdmin} style={linkBtn}>Sign out</button>
           </div>
 
-          {/* GAME FILTER */}
+          {/* GAME (follows the page tab, but still changeable) */}
           <div style={row}>
             <label style={label}>Game</label>
             <div style={{ display: "flex", gap: 8 }}>
@@ -284,10 +285,10 @@ export default function ScorePanel({ onChange }) {
             </div>
           </div>
 
-          {/* PLAYERS BY SELECTED GAME */}
+          {/* PLAYERS */}
           <div style={row}>
             <label style={label}>
-              Player (Twitter) — {listLoading ? "loading…" : listErr ? "error" : `${options.length} found`}
+              Player — {listLoading ? "loading…" : listErr ? "error" : `${options.length} found`}
             </label>
             <select
               value={selectedUsername}
@@ -307,13 +308,23 @@ export default function ScorePanel({ onChange }) {
             <input
               type="number"
               value={points}
-              onChange={(e) => setPoints(e.target.value)}
+              onChange={(e) => setPoints(Number(e.target.value))}
               placeholder="e.g., 50"
               style={input}
             />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={smallBtn} onClick={() => setPoints((p) => Number(p) + 10)}>+10</button>
+              <button style={smallBtn} onClick={() => setPoints((p) => Number(p) + 50)}>+50</button>
+              <button style={smallBtn} onClick={() => setPoints((p) => Number(p) - 10)}>-10</button>
+              <button style={smallBtn} onClick={() => setPoints(10)}>Reset 10</button>
+            </div>
           </div>
 
-          <button onClick={addScore} style={btnAction} disabled={busyPoints}>
+          <button
+            onClick={addScore}
+            style={btnAction}
+            disabled={busyPoints || !selectedUsername || !Number.isFinite(points) || Number(points) === 0}
+          >
             {busyPoints ? "Working…" : "Add Points"}
           </button>
 
